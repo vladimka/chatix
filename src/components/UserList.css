@@ -1,0 +1,76 @@
+.user-list-full {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-item-full {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.user-item-full:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2e8bff, #1a5bbf);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 1rem;
+  color: white;
+  text-transform: uppercase;
+}
+
+.user-info-full {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.user-name-full {
+  font-size: 0.95rem;
+  color: #eef4ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.typing-indicator-full {
+  font-size: 0.7rem;
+  color: #7a8b9f;
+  font-style: italic;
+  animation: pulse 1.5s infinite;
+}
+
+.user-status-full {
+  font-size: 0.8rem;
+}
+
+.user-status-full.online {
+  color: #4caf50;
+}
+
+.no-users {
+  padding: 20px;
+  text-align: center;
+  color: #7a8b9f;
+  font-style: italic;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
