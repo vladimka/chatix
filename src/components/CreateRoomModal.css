@@ -1,0 +1,187 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.modal-content {
+  background: #1e2a36;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 1px solid #3f556d;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #2b3c4f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-header h2 {
+  color: #eef4ff;
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #7a8b9f;
+  font-size: 1.2rem;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+form {
+  padding: 24px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  color: #bdd3ff;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group textarea {
+  width: 100%;
+  padding: 12px;
+  background: #0f1a24;
+  border: 1px solid #31475e;
+  border-radius: 8px;
+  color: white;
+  font-size: 1rem;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  border-color: #2e8bff;
+  box-shadow: 0 0 0 3px rgba(46, 139, 255, 0.2);
+}
+
+.form-group.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-group.checkbox label {
+  margin: 0;
+  cursor: pointer;
+}
+
+.form-group.checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.settings-group {
+  background: #0f1a24;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-group .checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #bdd3ff;
+  cursor: pointer;
+}
+
+.slow-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #bdd3ff;
+}
+
+.slow-mode input {
+  width: 80px;
+  padding: 8px;
+  background: #1e2a36;
+  border: 1px solid #31475e;
+  border-radius: 4px;
+  color: white;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.cancel-btn,
+.create-btn {
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.cancel-btn {
+  background: transparent;
+  border: 1px solid #425d7a;
+  color: #b0c7e7;
+}
+
+.cancel-btn:hover {
+  background: #253b52;
+  color: white;
+}
+
+.create-btn {
+  background: #2e8bff;
+  color: white;
+  border: none;
+}
+
+.create-btn:hover {
+  background: #1a7aff;
+  transform: scale(1.02);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

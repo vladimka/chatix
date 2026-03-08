@@ -1,129 +1,375 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import socketService from '../services/socket';
+import RoomList from './RoomList';
+import RoomInfo from './RoomInfo';
 import UserList from './UserList';
 import ConnectionStatus from './ConnectionStatus';
+import CreateRoomModal from './CreateRoomModal';
+import InviteModal from './InviteModal';
 import { 
   addMessage, 
   setHistory,
   setUsers,
-  addUser,
-  removeUser,
+  setRooms,
+  setCurrentRoom,
   setUserTyping,
   setConnectionStatus,
   clearHistory,
-  selectSortedMessages,
+  setError,
+  clearError,
+  selectMessages,
+  selectUsers,
+  selectRooms,
+  selectCurrentRoom,
   selectConnectionStatus,
-  selectError,
-  clearError 
+  selectError
 } from '../store/slices/chatSlice';
 import './ChatRoom.css';
-import { useDebounce } from '../hooks/useDebounce';
 
 const ChatRoom = () => {
   const dispatch = useDispatch();
-  const messages = useSelector(selectSortedMessages);
+  const messages = useSelector(selectMessages);
+  const users = useSelector(selectUsers);
+  const rooms = useSelector(selectRooms);
+  const currentRoom = useSelector(selectCurrentRoom);
   const connectionStatus = useSelector(selectConnectionStatus);
   const error = useSelector(selectError);
   
+  // Загружаем username из localStorage при старте
   const [username, setUsername] = useState(() => {
-    return localStorage.getItem('chat_username') || 'Аноним';
+    const saved = localStorage.getItem('chat_username');
+    return saved || 'Аноним';
   });
+  
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [showRoomList, setShowRoomList] = useState(false);
   const [showUserList, setShowUserList] = useState(false);
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showCreateRoom, setShowCreateRoom] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showRoomInfo, setShowRoomInfo] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [isChangingRoom, setIsChangingRoom] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [isIOS, setIsIOS] = useState(false);
   
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const messageInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
-  const usernameTimeoutRef = useRef(null); // Таймер для debounce ника
-  const lastUsernameRef = useRef(''); // Храним последний отправленный ник
+  const usernameTimeoutRef = useRef(null);
 
-  // Подключение к WebSocket
+  // Определяем iOS устройство
   useEffect(() => {
-    dispatch(setConnectionStatus('connecting'));
-    socketService.connect();
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    setIsIOS(iOS);
+    if (iOS) {
+      document.body.classList.add('ios-device');
+    }
+  }, []);
 
-    socketService.on('connect', () => {
+  // Отслеживание размера экрана
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      
+      if (mobile) {
+        setShowRoomList(false);
+        setShowUserList(false);
+      } else {
+        setShowRoomList(true);
+        setShowUserList(true);
+      }
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Функции для открытия/закрытия панелей на мобильных
+  const toggleRoomList = useCallback(() => {
+    if (isMobile) {
+      setShowRoomList(prev => !prev);
+      setShowUserList(false);
+    } else {
+      setShowRoomList(prev => !prev);
+    }
+  }, [isMobile]);
+
+  const toggleUserList = useCallback(() => {
+    if (isMobile) {
+      setShowUserList(prev => !prev);
+      setShowRoomList(false);
+    } else {
+      setShowUserList(prev => !prev);
+    }
+  }, [isMobile]);
+
+  // Закрытие панелей при клике вне (для мобильных)
+  useEffect(() => {
+    if (!isMobile) return;
+
+    const handleClickOutside = (e) => {
+      if (!e.target.closest('.rooms-panel') && !e.target.closest('.menu-btn')) {
+        setShowRoomList(false);
+      }
+      if (!e.target.closest('.users-panel') && !e.target.closest('.users-toggle')) {
+        setShowUserList(false);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [isMobile]);
+
+  // Подключение к WebSocket и инициализация
+  useEffect(() => {
+    let mounted = true;
+    let retryCount = 0;
+    const maxRetries = 3;
+
+    // Регистрируем все обработчики ДО подключения
+    console.log('📋 Регистрация всех обработчиков событий...');
+
+    const handleConnect = () => {
+      console.log('🔌 Событие connect');
       dispatch(setConnectionStatus('connected'));
-      // При подключении отправляем текущий ник
-      const currentUsername = username.trim() || 'Аноним';
-      lastUsernameRef.current = currentUsername;
-      socketService.emit('join', currentUsername);
-    });
+    };
 
-    socketService.on('disconnect', () => {
+    const handleDisconnect = () => {
+      console.log('🔌 Событие disconnect');
       dispatch(setConnectionStatus('disconnected'));
-    });
+    };
 
-    socketService.on('history', (history) => {
-      dispatch(setHistory(history));
-    });
+    const handleHistory = (history) => {
+      console.log('📜 Получена история:', history?.length || 0);
+      if (Array.isArray(history)) {
+        dispatch(setHistory(history));
+        setTimeout(scrollToBottom, 100);
+      }
+    };
 
-    socketService.on('message', (message) => {
+    const handleNewMessage = (message) => {
+      console.log('💬 Новое сообщение:', message);
       dispatch(addMessage(message));
-    });
+      scrollToBottom();
+    };
 
-    socketService.on('usersList', (users) => {
-      dispatch(setUsers(users));
-    });
+    const handleUsersList = (users) => {
+      console.log('👥 Получен список пользователей:', users?.length || 0);
+      dispatch(setUsers(users || []));
+    };
 
-    socketService.on('userJoined', (user) => {
-      dispatch(addUser(user));
-      dispatch(addMessage({
-        id: Date.now(),
-        author: 'ℹ️',
-        text: `✨ ${user.username} присоединился к чату`,
-        timestamp: Date.now(),
-        system: true
-      }));
-    });
+    const handleRoomsList = (rooms) => {
+      console.log('🏠 ПОЛУЧЕН СПИСОК КОМНАТ:', rooms);
+      console.log('🏠 Количество:', rooms?.length || 0);
+      
+      if (Array.isArray(rooms)) {
+        dispatch(setRooms([...rooms]));
+      }
+    };
 
-    socketService.on('userTyping', ({ userId, isTyping }) => {
+    const handleRoomJoined = (room) => {
+      console.log('🚪 Присоединились к комнате:', room?.name);
+      dispatch(setCurrentRoom(room));
+      setIsChangingRoom(false);
+    };
+
+    const handleLeftRoom = () => {
+      console.log('🚪 Покинули комнату');
+      dispatch(setCurrentRoom(null));
+    };
+
+    const handleRoomCreated = (room) => {
+      console.log('✅ Комната создана:', room?.name);
+      setShowCreateRoom(false);
+      if (room?._id) {
+        setTimeout(() => socketService.emit('joinRoom', room._id), 100);
+      }
+    };
+
+    const handleRoomUpdated = (room) => {
+      if (currentRoom?._id === room._id) {
+        dispatch(setCurrentRoom(room));
+      }
+    };
+
+    const handleRoomDeleted = ({ roomId }) => {
+      if (currentRoom?._id === roomId) {
+        dispatch(setCurrentRoom(null));
+      }
+    };
+
+    const handleUserTyping = ({ userId, isTyping }) => {
       dispatch(setUserTyping({ userId, isTyping }));
-    });
+    };
+
+    const handleRoomInvitation = (invitation) => {
+      if (window.confirm(`Приглашение в комнату "${invitation.roomName}" от ${invitation.from}. Принять?`)) {
+        socketService.emit('acceptInvitation', invitation.roomId);
+      }
+    };
+
+    const handleInviteLinkCreated = (data) => {
+      navigator.clipboard.writeText(data.link);
+      alert(`Ссылка скопирована: ${data.link}`);
+    };
+
+    const handleSearchResults = (results) => {
+      setSearchResults(results);
+    };
+
+    const handleError = (errorMessage) => {
+      console.error('❌ Ошибка от сервера:', errorMessage);
+      alert(errorMessage);
+      setIsChangingRoom(false);
+    };
+
+    // Регистрируем все обработчики
+    socketService.on('connect', handleConnect);
+    socketService.on('disconnect', handleDisconnect);
+    socketService.on('history', handleHistory);
+    socketService.on('newMessage', handleNewMessage);
+    socketService.on('usersList', handleUsersList);
+    socketService.on('roomsList', handleRoomsList);
+    socketService.on('roomJoined', handleRoomJoined);
+    socketService.on('leftRoom', handleLeftRoom);
+    socketService.on('roomCreated', handleRoomCreated);
+    socketService.on('roomUpdated', handleRoomUpdated);
+    socketService.on('roomDeleted', handleRoomDeleted);
+    socketService.on('userTyping', handleUserTyping);
+    socketService.on('roomInvitation', handleRoomInvitation);
+    socketService.on('inviteLinkCreated', handleInviteLinkCreated);
+    socketService.on('searchResults', handleSearchResults);
+    socketService.on('error', handleError);
+
+    // Подключаемся
+    const initializeChat = async () => {
+      try {
+        dispatch(setConnectionStatus('connecting'));
+        console.log('🔄 Начинаем инициализацию чата...');
+
+        const initData = await socketService.connect();
+        
+        if (!mounted) return;
+
+        console.log('✅ Чат инициализирован:', initData);
+        
+        if (initData.username && initData.username !== username) {
+          setUsername(initData.username);
+        }
+        
+        setIsInitialized(true);
+        dispatch(setConnectionStatus('connected'));
+
+      } catch (error) {
+        console.error('❌ Ошибка инициализации:', error);
+        
+        if (!mounted) return;
+
+        if (retryCount < maxRetries) {
+          retryCount++;
+          console.log(`🔄 Повторная попытка ${retryCount}/${maxRetries} через 2 секунды...`);
+          setTimeout(initializeChat, 2000);
+        } else {
+          dispatch(setConnectionStatus('disconnected'));
+          dispatch(setError('Не удалось подключиться к серверу'));
+        }
+      }
+    };
+
+    initializeChat();
 
     return () => {
-      socketService.disconnect();
+      console.log('🧹 Очистка эффекта ChatRoom');
+      mounted = false;
+      
+      socketService.off('connect');
+      socketService.off('disconnect');
+      socketService.off('history');
+      socketService.off('newMessage');
+      socketService.off('usersList');
+      socketService.off('roomsList');
+      socketService.off('roomJoined');
+      socketService.off('leftRoom');
+      socketService.off('roomCreated');
+      socketService.off('roomUpdated');
+      socketService.off('roomDeleted');
+      socketService.off('userTyping');
+      socketService.off('roomInvitation');
+      socketService.off('inviteLinkCreated');
+      socketService.off('searchResults');
+      socketService.off('error');
     };
-  }, [dispatch]);
+  }, [dispatch, username]);
 
-  // Сохранение username в localStorage
+  // Сохранение username
   useEffect(() => {
     localStorage.setItem('chat_username', username);
   }, [username]);
 
-  // Используем кастомный хук для debounce ника
-  const debouncedUsername = useDebounce(username, 1000, (newUsername) => {
-    const trimmedUsername = newUsername.trim() || 'Аноним';
-    if (socketService.isConnected() && trimmedUsername !== lastUsernameRef.current) {
-      console.log('Debounced отправка ника:', trimmedUsername);
-      socketService.emit('changeUsername', trimmedUsername);
-      lastUsernameRef.current = trimmedUsername;
+  // Debounced отправка ника
+  useEffect(() => {
+    if (usernameTimeoutRef.current) {
+      clearTimeout(usernameTimeoutRef.current);
     }
-  });
 
-  // Прокрутка
+    usernameTimeoutRef.current = setTimeout(() => {
+      if (socketService.isConnected()) {
+        socketService.emit('changeUsername', username);
+      }
+    }, 1000);
+
+    return () => clearTimeout(usernameTimeoutRef.current);
+  }, [username]);
+
+  // Прокрутка вниз
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ 
+        behavior: 'smooth',
+        block: 'end'
+      });
+    }
   }, []);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Обработка появления клавиатуры на iOS
+  useEffect(() => {
+    if (!isIOS) return;
+
+    const handleResize = () => {
+      setTimeout(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isIOS]);
+
   // Отправка сообщения
   const handleSendMessage = useCallback(() => {
-    if (!inputMessage.trim() || connectionStatus !== 'connected') return;
+    if (!inputMessage.trim() || connectionStatus !== 'connected' || !currentRoom) return;
 
-    socketService.emit('message', {
+    socketService.emit('sendMessage', {
       text: inputMessage.trim()
     });
 
     setInputMessage('');
     messageInputRef.current?.focus();
-  }, [inputMessage, connectionStatus]);
+  }, [inputMessage, connectionStatus, currentRoom]);
 
   // Обработка Enter
   const handleKeyPress = useCallback((e) => {
@@ -137,7 +383,7 @@ const ChatRoom = () => {
   const handleInputChange = useCallback((e) => {
     setInputMessage(e.target.value);
 
-    if (!isTyping && e.target.value) {
+    if (!isTyping && e.target.value && currentRoom) {
       setIsTyping(true);
       socketService.emit('typing', true);
     }
@@ -152,49 +398,79 @@ const ChatRoom = () => {
         socketService.emit('typing', false);
       }
     }, 1000);
-  }, [isTyping]);
+  }, [isTyping, currentRoom]);
 
-  // Случайный ник - отправляем сразу, но с debounce
+  // Обработка фокуса на iOS
+  const handleInputFocus = useCallback(() => {
+    if (isIOS) {
+      setTimeout(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ 
+            behavior: 'smooth',
+            block: 'end'
+          });
+        }
+      }, 300);
+    }
+  }, [isIOS]);
+
+  // Выбор комнаты
+  const handleRoomSelect = useCallback((room) => {
+    setIsChangingRoom(true);
+    console.log('Выбрана комната:', room.name, room._id);
+    
+    const joinRoom = () => {
+      if (room.isPrivate) {
+        const password = prompt('Введите пароль для доступа к комнате:');
+        if (password !== null) {
+          socketService.emit('joinRoom', room._id, password);
+        } else {
+          setIsChangingRoom(false);
+        }
+      } else {
+        socketService.emit('joinRoom', room._id);
+      }
+      if (isMobile) setShowRoomList(false);
+    };
+
+    if (currentRoom) {
+      console.log('Покидаем текущую комнату перед входом в новую');
+      socketService.emit('leaveRoom');
+      setTimeout(joinRoom, 200);
+    } else {
+      joinRoom();
+    }
+  }, [currentRoom, isMobile]);
+
+  // Случайный ник
   const generateRandomName = useCallback(() => {
-    const names = ['Путешественник', 'Люмос', 'Тень', 'Странник', 'Искра', 
-                   'Код', 'Волна', 'Звёзд', 'Пиксель', 'Феникс', 'Nova'];
+    const names = [
+      'Путешественник', 'Кодер', 'Хакер', 'Гик', 'Программист', 
+      'Дизайнер', 'Админ', 'Мастер', 'Воин', 'Маг', 'Эльф', 
+      'Хоббит', 'Астронавт', 'Пират', 'Ниндзя', 'Самурай'
+    ];
     const randomName = names[Math.floor(Math.random() * names.length)] + 
                       Math.floor(Math.random() * 1000);
     setUsername(randomName);
-    
-    // Очищаем предыдущий таймер и отправляем сразу для случайного ника
-    if (usernameTimeoutRef.current) {
-      clearTimeout(usernameTimeoutRef.current);
-    }
-    
-    // Отправляем сразу, но с небольшой задержкой для надежности
-    setTimeout(() => {
-      if (socketService.isConnected()) {
-        socketService.emit('changeUsername', randomName);
-        lastUsernameRef.current = randomName;
-      }
-    }, 100);
   }, []);
 
-  // Очистка истории
-  const handleClearHistory = useCallback(() => {
-    if (window.confirm('Очистить историю сообщений?')) {
-      dispatch(clearHistory());
+  // Поиск комнат
+  const handleSearch = useCallback((query) => {
+    setSearchQuery(query);
+    if (query.trim()) {
+      socketService.emit('searchRooms', query);
+    } else {
+      setSearchResults([]);
     }
-  }, [dispatch]);
+  }, []);
 
-  // Принудительная отправка ника при потере фокуса с поля ввода
-  const handleUsernameBlur = useCallback(() => {
-    if (usernameTimeoutRef.current) {
-      clearTimeout(usernameTimeoutRef.current);
+  // Выход из комнаты
+  const handleLeaveRoom = useCallback(() => {
+    if (currentRoom && window.confirm('Покинуть комнату?')) {
+      socketService.emit('leaveRoom');
+      if (isMobile) setShowUserList(false);
     }
-    
-    const trimmedUsername = username.trim() || 'Аноним';
-    if (socketService.isConnected() && trimmedUsername !== lastUsernameRef.current) {
-      socketService.emit('changeUsername', trimmedUsername);
-      lastUsernameRef.current = trimmedUsername;
-    }
-  }, [username]);
+  }, [currentRoom, isMobile]);
 
   // Форматирование времени
   const formatTime = (timestamp) => {
@@ -204,8 +480,34 @@ const ChatRoom = () => {
     });
   };
 
+  // Форматирование даты
+  const formatDate = (timestamp) => {
+    const date = new Date(timestamp);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) {
+      return 'Сегодня';
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Вчера';
+    } else {
+      return date.toLocaleDateString('ru-RU');
+    }
+  };
+
+  // Показываем загрузку пока не инициализировано
+  if (!isInitialized) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-spinner"></div>
+        <div>Подключение к чату...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="chat-room-fullscreen">
+    <div className={`chat-room-fullscreen ${isIOS ? 'ios-device' : ''}`}>
       {error && (
         <div className="error-banner">
           <span>⚠️ {error}</span>
@@ -217,20 +519,29 @@ const ChatRoom = () => {
       <div className="chat-header">
         <div className="header-left">
           <button 
-            className="menu-btn"
-            onClick={() => setShowSidebar(!showSidebar)}
-            title="Меню"
+            className={`menu-btn ${showRoomList ? 'active' : ''}`}
+            onClick={toggleRoomList}
+            title="Список комнат"
           >
             ☰
           </button>
           <h1 className="chat-title">
-            💬 Chatix
-            <span className="badge">online</span>
+            💬 Чат
+            {isMobile && rooms.length > 0 && (
+              <span className="room-count-badge">{rooms.length}</span>
+            )}
           </h1>
         </div>
 
         <div className="header-center">
           <ConnectionStatus />
+          {currentRoom && !isMobile && (
+            <div className="current-room-info" onClick={() => setShowRoomInfo(true)}>
+              <span className="room-name">#{currentRoom.name}</span>
+              <span className="room-topic">{currentRoom.topic || 'Нет темы'}</span>
+              <button className="room-info-btn" title="Информация о комнате">ℹ️</button>
+            </div>
+          )}
         </div>
 
         <div className="header-right">
@@ -238,12 +549,11 @@ const ChatRoom = () => {
             <input
               type="text"
               className="username-input"
-              placeholder="Ваш ник"
+              placeholder="Ник"
               maxLength="24"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              onBlur={handleUsernameBlur} // Отправляем при потере фокуса
-              title="Ник изменится через 1 секунду после окончания ввода"
+              title="Ник изменится через 1 секунду"
             />
             <button 
               className="btn-icon"
@@ -254,133 +564,260 @@ const ChatRoom = () => {
             </button>
           </div>
           <button 
-            className="btn-icon users-toggle"
-            onClick={() => setShowUserList(!showUserList)}
+            className={`btn-icon users-toggle ${showUserList ? 'active' : ''}`}
+            onClick={toggleUserList}
             title="Участники онлайн"
           >
-            👥
+            👥 {!isMobile && users.length}
           </button>
         </div>
       </div>
 
+      {/* Мобильная информация о текущей комнате */}
+      {isMobile && currentRoom && (
+        <div className="mobile-room-info" onClick={() => setShowRoomInfo(true)}>
+          <span className="room-name">#{currentRoom.name}</span>
+          <span className="room-topic">{currentRoom.topic || 'Нет темы'}</span>
+          <button className="room-info-btn">ℹ️</button>
+        </div>
+      )}
+
       {/* Основной контент */}
-      <div className="chat-main">
-        {/* Левая боковая панель */}
-        {showSidebar && (
-          <div className="sidebar">
-            <div className="sidebar-section">
-              <h3>Комнаты</h3>
-              <div className="room-list">
-                <div className="room-item active"># Общий чат</div>
-                <div className="room-item"># Работа</div>
-                <div className="room-item"># Флуд</div>
-              </div>
-            </div>
-            <div className="sidebar-section">
-              <h3>Настройки</h3>
-              <div className="settings-item">
-                <label>
-                  <input type="checkbox" /> Звук уведомлений
-                </label>
-              </div>
-              <div className="settings-item">
-                <label>
-                  <input type="checkbox" defaultChecked /> Автопрокрутка
-                </label>
-              </div>
-            </div>
+      <div className="chat-main" ref={messagesContainerRef}>
+        {/* Левая панель - комнаты */}
+        <div className={`rooms-panel ${showRoomList ? 'open' : ''}`}>
+          <div className="rooms-panel-header">
+            <h3>Комнаты {rooms.length > 0 && `(${rooms.length})`}</h3>
+            <button 
+              className="create-room-btn"
+              onClick={() => setShowCreateRoom(true)}
+              title="Создать комнату"
+            >
+              ➕
+            </button>
           </div>
-        )}
+          
+          {/* Поиск комнат */}
+          <div className="rooms-search">
+            <input
+              type="text"
+              placeholder="Поиск комнат..."
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Результаты поиска или список комнат */}
+          {searchResults.length > 0 ? (
+            <div className="search-results">
+              <h4>Результаты поиска:</h4>
+              {searchResults.map(room => (
+                <div 
+                  key={room._id} 
+                  className="room-item search-result"
+                  onClick={() => {
+                    handleRoomSelect(room);
+                    if (isMobile) setShowRoomList(false);
+                  }}
+                >
+                  <span className="room-name">#{room.name}</span>
+                  <span className="room-meta">
+                    {room.members?.length || 0} 👥
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <RoomList 
+              rooms={rooms}
+              currentRoom={currentRoom}
+              onRoomSelect={(room) => {
+                handleRoomSelect(room);
+                if (isMobile) setShowRoomList(false);
+              }}
+            />
+          )}
+        </div>
 
         {/* Центральная область - сообщения */}
         <div className="messages-container">
-          <div className="messages-wrapper">
-            {messages.map((msg) => {
-              if (msg.system) {
-                return (
-                  <div key={msg.id} className="system-message">
-                    {msg.text}
+          {currentRoom ? (
+            <>
+              <div className="messages-wrapper">
+                {messages && messages.length > 0 ? (
+                  messages.map((msg, index) => {
+                    const msgDate = msg.timestamp ? formatDate(msg.timestamp) : 'Неизвестно';
+                    const prevMsgDate = index > 0 && messages[index-1]?.timestamp 
+                      ? formatDate(messages[index-1].timestamp) 
+                      : null;
+                    
+                    const showDate = index === 0 || msgDate !== prevMsgDate;
+                    const msgKey = msg._id || msg.id || `msg-${index}-${Date.now()}`;
+                    
+                    return (
+                      <React.Fragment key={msgKey}>
+                        {showDate && (
+                          <div className="date-separator">
+                            {msgDate}
+                          </div>
+                        )}
+                        
+                        {msg.system ? (
+                          <div className="system-message">
+                            {msg.text || 'Системное сообщение'}
+                          </div>
+                        ) : (
+                          <div className={`message ${msg.author === username ? 'own' : ''}`}>
+                            <div className="message-header">
+                              <span className="author">{msg.author || 'Неизвестно'}</span>
+                              <span className="time">
+                                {msg.timestamp ? formatTime(msg.timestamp) : '--:--'}
+                              </span>
+                            </div>
+                            <div className="message-content">
+                              {msg.text || 'Пустое сообщение'}
+                            </div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                ) : (
+                  <div className="no-messages">
+                    <p>Нет сообщений в этой комнате</p>
+                    <p className="no-messages-hint">Напишите что-нибудь...</p>
                   </div>
-                );
-              }
+                )}
+                <div ref={messagesEndRef} />
+              </div>
 
-              const isOwn = msg.author === username;
-              return (
-                <div key={msg.id} className={`message ${isOwn ? 'own' : ''}`}>
-                  <div className="message-header">
-                    <span className="author">{msg.author}</span>
-                    <span className="time">{formatTime(msg.timestamp)}</span>
-                  </div>
-                  <div className="message-content">{msg.text}</div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Панель ввода */}
-          <div className="input-container">
-            <input
-              ref={messageInputRef}
-              type="text"
-              className="message-input-full"
-              placeholder={connectionStatus === 'connected' 
-                ? "Написать сообщение..." 
-                : "Ожидание подключения..."}
-              value={inputMessage}
-              onChange={handleInputChange}
-              onKeyPress={handleKeyPress}
-              disabled={connectionStatus !== 'connected'}
-            />
-            <button 
-              className="send-btn-full" 
-              onClick={handleSendMessage}
-              disabled={connectionStatus !== 'connected'}
-            >
-              Отправить
-            </button>
-            <button 
-              className="clear-btn-full" 
-              onClick={handleClearHistory}
-              title="Очистить историю"
-            >
-              🗑️
-            </button>
-          </div>
-        </div>
-
-        {/* Правая боковая панель - пользователи */}
-        {showUserList && (
-          <div className="users-panel">
-            <div className="users-panel-header">
-              <h3>Участники онлайн</h3>
+              {/* Панель ввода - всегда видна внизу */}
+              <div className="input-container">
+                <input
+                  ref={messageInputRef}
+                  type="text"
+                  className="message-input-full"
+                  placeholder={connectionStatus === 'connected' 
+                    ? "Написать сообщение..." 
+                    : "Ожидание подключения..."}
+                  value={inputMessage}
+                  onChange={handleInputChange}
+                  onKeyPress={handleKeyPress}
+                  onFocus={handleInputFocus}
+                  disabled={connectionStatus !== 'connected' || !currentRoom}
+                />
+                <button 
+                  className="send-btn-full" 
+                  onClick={handleSendMessage}
+                  disabled={connectionStatus !== 'connected' || !currentRoom}
+                >
+                  {isMobile ? '➤' : 'Отправить'}
+                </button>
+                {!isMobile && (
+                  <>
+                    <button 
+                      className="invite-btn"
+                      onClick={() => setShowInviteModal(true)}
+                      title="Пригласить в комнату"
+                      disabled={!currentRoom}
+                    >
+                      🔗
+                    </button>
+                    <button 
+                      className="leave-btn"
+                      onClick={handleLeaveRoom}
+                      title="Покинуть комнату"
+                      disabled={!currentRoom}
+                    >
+                      🚪
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="no-room-selected">
+              <h2>Выберите комнату</h2>
+              <p>для начала общения</p>
               <button 
-                className="close-panel"
-                onClick={() => setShowUserList(false)}
+                className="create-room-big-btn"
+                onClick={() => setShowCreateRoom(true)}
               >
-                ✕
+                ➕ Создать
               </button>
             </div>
-            <UserList />
+          )}
+        </div>
+
+        {/* Правая панель - пользователи */}
+        <div className={`users-panel ${showUserList ? 'open' : ''}`}>
+          <div className="users-panel-header">
+            <h3>Участники {users.length > 0 && `(${users.length})`}</h3>
+            <button 
+              className="close-panel"
+              onClick={() => setShowUserList(false)}
+            >
+              ✕
+            </button>
           </div>
-        )}
+          <UserList users={users} />
+        </div>
       </div>
 
-      {/* Мобильное меню */}
-      <div className="mobile-menu">
-        <button 
-          className={`mobile-menu-btn ${showSidebar ? 'active' : ''}`}
-          onClick={() => setShowSidebar(!showSidebar)}
-        >
-          ☰ Комнаты
-        </button>
-        <button 
-          className={`mobile-menu-btn ${showUserList ? 'active' : ''}`}
-          onClick={() => setShowUserList(!showUserList)}
-        >
-          👥 Участники
-        </button>
-      </div>
+      {/* Модальные окна */}
+      {showCreateRoom && (
+        <CreateRoomModal
+          onClose={() => setShowCreateRoom(false)}
+          onCreate={(roomData) => {
+            socketService.emit('createRoom', roomData);
+          }}
+        />
+      )}
+
+      {showInviteModal && currentRoom && (
+        <InviteModal
+          room={currentRoom}
+          onClose={() => setShowInviteModal(false)}
+          onInvite={(username) => {
+            socketService.emit('inviteToRoom', {
+              roomId: currentRoom._id,
+              username
+            });
+            setShowInviteModal(false);
+          }}
+          onCreateLink={(options) => {
+            socketService.emit('createInviteLink', currentRoom._id, options);
+          }}
+        />
+      )}
+
+      {showRoomInfo && currentRoom && (
+        <RoomInfo
+          room={currentRoom}
+          onClose={() => setShowRoomInfo(false)}
+          onUpdate={(updates) => {
+            socketService.emit('updateRoom', {
+              roomId: currentRoom._id,
+              updates
+            });
+            setShowRoomInfo(false);
+          }}
+          onDelete={() => {
+            if (window.confirm('Удалить комнату? Это действие нельзя отменить.')) {
+              socketService.emit('deleteRoom', currentRoom._id);
+              setShowRoomInfo(false);
+            }
+          }}
+        />
+      )}
+
+      {/* Индикатор загрузки при смене комнаты */}
+      {isChangingRoom && (
+        <div className="room-change-overlay">
+          <div className="loading-spinner-small"></div>
+          <div>Переключение комнаты...</div>
+        </div>
+      )}
     </div>
   );
 };

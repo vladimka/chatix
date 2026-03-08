@@ -1,0 +1,366 @@
+.invite-modal {
+  background: #1e2a36;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #3f556d;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+  animation: slideIn 0.3s ease;
+}
+
+.modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #2b3c4f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.modal-header h2 {
+  color: #eef4ff;
+  font-size: 1.2rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.room-name-badge {
+  background: rgba(46, 139, 255, 0.2);
+  color: #2e8bff;
+  padding: 4px 10px;
+  border-radius: 40px;
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #7a8b9f;
+  font-size: 1.2rem;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+/* Переключатель типов */
+.invite-type-selector {
+  display: flex;
+  padding: 16px 24px;
+  gap: 12px;
+  border-bottom: 1px solid #2b3c4f;
+}
+
+.type-btn {
+  flex: 1;
+  padding: 10px;
+  background: transparent;
+  border: 1px solid #3f556d;
+  border-radius: 8px;
+  color: #7a8b9f;
+  font-size: 0.95rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.type-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #bdd3ff;
+  border-color: #5f7a9f;
+}
+
+.type-btn.active {
+  background: rgba(46, 139, 255, 0.15);
+  border-color: #2e8bff;
+  color: #2e8bff;
+}
+
+/* Контент */
+.invite-content {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Форма приглашения пользователя */
+.invite-user-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  color: #bdd3ff;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.form-group input,
+.form-group select {
+  padding: 12px;
+  background: #0f1a24;
+  border: 1px solid #31475e;
+  border-radius: 8px;
+  color: white;
+  font-size: 1rem;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: #2e8bff;
+  box-shadow: 0 0 0 3px rgba(46, 139, 255, 0.2);
+}
+
+.form-group input::placeholder {
+  color: #5f7a9f;
+}
+
+/* Информационные сообщения */
+.info-message {
+  background: rgba(46, 139, 255, 0.1);
+  border: 1px solid rgba(46, 139, 255, 0.3);
+  color: #bdd3ff;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.warning-message {
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  color: #ffc107;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.success-message {
+  background: rgba(76, 175, 80, 0.1);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  color: #4caf50;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+/* Сгенерированная ссылка */
+.generated-link-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.link-box {
+  display: flex;
+  gap: 8px;
+}
+
+.link-input {
+  flex: 1;
+  padding: 12px;
+  background: #0f1a24;
+  border: 1px solid #2e8bff;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.9rem;
+  font-family: monospace;
+}
+
+.copy-btn {
+  padding: 0 20px;
+  background: rgba(46, 139, 255, 0.2);
+  border: 1px solid #2e8bff;
+  border-radius: 8px;
+  color: #2e8bff;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover {
+  background: rgba(46, 139, 255, 0.3);
+  transform: scale(1.02);
+}
+
+.link-info {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #2b3c4f;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  color: #bdd3ff;
+}
+
+.info-row:not(:last-child) {
+  border-bottom: 1px solid #2b3c4f;
+}
+
+/* Кнопки действий */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.cancel-btn,
+.invite-btn,
+.create-link-btn,
+.create-another-btn {
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  font-weight: 500;
+}
+
+.cancel-btn {
+  background: transparent;
+  border: 1px solid #425d7a;
+  color: #b0c7e7;
+}
+
+.cancel-btn:hover {
+  background: #253b52;
+  color: white;
+}
+
+.invite-btn,
+.create-link-btn,
+.create-another-btn {
+  background: #2e8bff;
+  color: white;
+}
+
+.invite-btn:hover,
+.create-link-btn:hover,
+.create-another-btn:hover {
+  background: #1a7aff;
+  transform: scale(1.02);
+}
+
+/* Примечание о приватности */
+.privacy-note {
+  padding: 16px 24px;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid #2b3c4f;
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+}
+
+.privacy-note h4 {
+  color: #bdd3ff;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+}
+
+.privacy-note p {
+  color: #7a8b9f;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* Анимации */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+  .invite-modal {
+    width: 95%;
+    max-height: 95vh;
+  }
+
+  .invite-type-selector {
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .type-btn {
+    width: 100%;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+  }
+
+  .modal-actions button {
+    width: 100%;
+  }
+
+  .link-box {
+    flex-direction: column;
+  }
+
+  .copy-btn {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-header {
+    padding: 16px;
+  }
+
+  .modal-header h2 {
+    font-size: 1rem;
+  }
+
+  .invite-content {
+    padding: 16px;
+  }
+
+  .privacy-note {
+    padding: 12px 16px;
+  }
+}
