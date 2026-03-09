@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 
@@ -11,12 +12,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ==================== КОНФИГУРАЦИЯ JWT ====================
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true
+    methods: ["GET", "POST"]
   },
   transports: ['websocket', 'polling'],
   pingTimeout: 60000,
@@ -26,7 +30,7 @@ const io = new Server(server, {
 
 // ==================== МОДЕЛИ MONGOOSE ====================
 
-// Схема для пользователя
+// Схема для пользователя (добавляем email и password)
 const userSchema = new mongoose.Schema({
   userId: { 
     type: String, 
@@ -34,7 +38,25 @@ const userSchema = new mongoose.Schema({
     unique: true,
     default: () => uuidv4()
   },
-  username: { type: String, required: true, trim: true, default: 'Аноним' },
+  username: { 
+    type: String, 
+    required: true, 
+    trim: true, 
+    unique: true,
+    minlength: 2,
+    maxlength: 30
+  },
+  email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    unique: true,
+    sparse: true
+  },
+  password: {
+    type: String,
+    select: false
+  },
   socketId: { type: String, sparse: true },
   lastSeen: { type: Date, default: Date.now, index: true },
   joinTime: { type: Date, default: Date.now },
@@ -49,6 +71,10 @@ const userSchema = new mongoose.Schema({
     theme: { type: String, default: 'dark' }
   }
 });
+
+// Индексы для быстрого поиска
+userSchema.index({ username: 1 });
+userSchema.index({ email: 1 });
 
 // Схема для комнаты
 const roomSchema = new mongoose.Schema({
@@ -157,6 +183,44 @@ const Room = mongoose.model('Room', roomSchema);
 const Message = mongoose.model('Message', messageSchema);
 const Invitation = mongoose.model('Invitation', invitationSchema);
 
+// ==================== MIDDLEWARE ====================
+
+// Middleware для проверки JWT токена
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Требуется токен авторизации' });
+  }
+  
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'Токен истек' });
+      }
+      return res.status(403).json({ error: 'Неверный токен' });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// Middleware для опциональной аутентификации (не требует токен, но проверяет если есть)
+function optionalAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (token) {
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (!err) {
+        req.user = user;
+      }
+    });
+  }
+  next();
+}
+
 // ==================== ПОДКЛЮЧЕНИЕ К MONGODB ====================
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/chatapp';
@@ -166,15 +230,7 @@ async function connectToMongoDB() {
     await mongoose.connect(MONGODB_URI);
     console.log('✅ MongoDB подключена');
 
-    // Очищаем все существующие индексы для users
-    try {
-      await mongoose.connection.db.collection('users').dropIndexes();
-      console.log('✅ Индексы users очищены');
-    } catch (error) {
-      console.log('⚠️ Индексы users не найдены или уже очищены');
-    }
-
-    // Обновляем существующие документы
+    // Миграция: добавляем userId для существующих записей без него
     const users = await User.find({ userId: { $exists: false } });
     for (const user of users) {
       user.userId = uuidv4();
@@ -182,13 +238,16 @@ async function connectToMongoDB() {
       console.log(`🔄 Обновлен пользователь: добавлен userId ${user.userId}`);
     }
 
-    // Создаем индексы заново
-    await User.createIndexes();
-    await Room.createIndexes();
-    await Message.createIndexes();
-    await Invitation.createIndexes();
-    
-    console.log('✅ Индексы созданы успешно');
+    // Синхронизируем индексы (создаст только отсутствующие)
+    try {
+      await User.syncIndexes();
+      await Room.syncIndexes();
+      await Message.syncIndexes();
+      await Invitation.syncIndexes();
+      console.log('✅ Индексы синхронизированы');
+    } catch (error) {
+      console.log('⚠️ Ошибка синхронизации индексов:', error.message);
+    }
     
     // Создаем дефолтные комнаты если их нет
     const defaultRooms = [
@@ -215,7 +274,236 @@ async function connectToMongoDB() {
   }
 }
 
+// ==================== HTTP ЭНДПОИНТЫ АУТЕНТИФИКАЦИИ ====================
+
+// Регистрация нового пользователя
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+    
+    // Валидация
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Имя пользователя и пароль обязательны' });
+    }
+    
+    if (username.length < 2 || username.length > 30) {
+      return res.status(400).json({ error: 'Имя пользователя должно быть от 2 до 30 символов' });
+    }
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Пароль должен быть не менее 6 символов' });
+    }
+    
+    // Проверяем существование пользователя
+    const existingUser = await User.findOne({ 
+      $or: [{ username }, { email }] 
+    });
+    
+    if (existingUser) {
+      if (existingUser.username === username) {
+        return res.status(409).json({ error: 'Пользователь с таким именем уже существует' });
+      }
+      if (existingUser.email === email) {
+        return res.status(409).json({ error: 'Пользователь с таким email уже существует' });
+      }
+    }
+    
+    // Хешируем пароль
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Создаем пользователя
+    const user = new User({
+      username: username.trim(),
+      email: email?.trim().toLowerCase() || undefined,
+      password: hashedPassword,
+      ip: req.ip || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent']
+    });
+    
+    await user.save();
+    
+    // Генерируем JWT токен
+    const token = jwt.sign(
+      { userId: user.userId, username: user.username },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+    
+    console.log(`✅ Зарегистрирован новый пользователь: ${username} (${user.userId})`);
+    
+    res.status(201).json({
+      success: true,
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        joinTime: user.joinTime
+      },
+      token
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка регистрации:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// Логин пользователя
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Имя пользователя и пароль обязательны' });
+    }
+    
+    // Ищем пользователя с паролем
+    const user = await User.findOne({ 
+      username: username.trim() 
+    }).select('+password');
+    
+    if (!user) {
+      return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
+    }
+    
+    // Проверяем пароль
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
+    }
+    
+    // Обновляем lastSeen и socketId
+    user.lastSeen = new Date();
+    await user.save();
+    
+    // Генерируем JWT токен
+    const token = jwt.sign(
+      { userId: user.userId, username: user.username },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+    
+    console.log(`✅ Пользователь вошел: ${username} (${user.userId})`);
+    
+    res.json({
+      success: true,
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        joinTime: user.joinTime,
+        messageCount: user.messageCount
+      },
+      token
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка логина:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// Верификация токена (для проверки на клиенте)
+app.get('/api/auth/verify', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findOne({ userId: req.user.userId })
+      .select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    res.json({
+      success: true,
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        joinTime: user.joinTime,
+        messageCount: user.messageCount,
+        lastSeen: user.lastSeen
+      }
+    });
+  } catch (error) {
+    console.error('❌ Ошибка верификации:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// Обновление профиля
+app.put('/api/auth/profile', authenticateToken, async (req, res) => {
+  try {
+    const { username, email, currentPassword, newPassword } = req.body;
+    
+    const user = await User.findOne({ userId: req.user.userId })
+      .select('+password');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    // Если меняем пароль - проверяем текущий
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Требуется текущий пароль' });
+      }
+      
+      const validPassword = await bcrypt.compare(currentPassword, user.password);
+      if (!validPassword) {
+        return res.status(401).json({ error: 'Неверный текущий пароль' });
+      }
+      
+      if (newPassword.length < 6) {
+        return res.status(400).json({ error: 'Новый пароль должен быть не менее 6 символов' });
+      }
+      
+      user.password = await bcrypt.hash(newPassword, 10);
+    }
+    
+    // Обновляем имя пользователя
+    if (username && username !== user.username) {
+      if (username.length < 2 || username.length > 30) {
+        return res.status(400).json({ error: 'Имя пользователя должно быть от 2 до 30 символов' });
+      }
+      
+      const existingUsername = await User.findOne({ username: username.trim() });
+      if (existingUsername && existingUsername.userId !== user.userId) {
+        return res.status(409).json({ error: 'Имя пользователя уже занято' });
+      }
+      
+      user.username = username.trim();
+    }
+    
+    // Обновляем email
+    if (email && email !== user.email) {
+      const existingEmail = await User.findOne({ email: email.trim().toLowerCase() });
+      if (existingEmail && existingEmail.userId !== user.userId) {
+        return res.status(409).json({ error: 'Email уже используется' });
+      }
+      user.email = email.trim().toLowerCase();
+    }
+    
+    await user.save();
+    
+    res.json({
+      success: true,
+      user: {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        joinTime: user.joinTime,
+        messageCount: user.messageCount
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка обновления профиля:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
 // ==================== ХРАНЕНИЕ В ПАМЯТИ ====================
+
 
 const onlineUsers = new Map(); // socketId -> { userId, username, roomId, lastActivity }
 const socketConnections = new Map(); // userId -> socketId (для отслеживания дублирующихся подключений)
@@ -275,10 +563,10 @@ async function sendSystemMessage(roomId, text, author = 'ℹ️', authorId = 'sy
       lastActivity: new Date()
     });
     
-    // Проверяем есть ли кто-то в комнате перед отправкой
+        // Проверяем есть ли кто-то в комнате перед отправкой
     const roomSockets = await io.in(roomId.toString()).fetchSockets();
     if (roomSockets.length > 0) {
-      io.to(roomId.toString()).emit('message', message.toObject());
+      io.to(roomId.toString()).emit('newMessage', message.toObject());
     }
     
     return message;
@@ -313,54 +601,80 @@ io.on('connection', (socket) => {
   console.log('🔌 Новое подключение:', socket.id);
 
   // ===== ИНИЦИАЛИЗАЦИЯ =====
-  socket.on('init', async (data) => {
+    socket.on('init', async (data) => {
     try {
-      const { username, userId: existingUserId } = data;
-      const trimmedUsername = username?.trim() || 'Аноним';
+      const { username, userId: existingUserId, token } = data;
+      const trimmedUsername = username?.trim();
       
-      console.log('📝 Init received:', { username: trimmedUsername, userId: existingUserId });
+      if (!trimmedUsername) {
+        console.log('❌ Init received without username');
+        socket.emit('error', 'Имя пользователя обязательно');
+        return;
+      }
+      
+      console.log('📝 Init received:', { 
+        username: trimmedUsername, 
+        userId: existingUserId,
+        hasToken: !!token 
+      });
       
       let userId = existingUserId;
       let user = null;
       
-      if (userId) {
-        user = await User.findOne({ userId });
-        console.log('🔍 Поиск пользователя:', userId, user ? 'найден' : 'не найден');
+      // Если есть JWT токен - проверяем его
+      if (token) {
+        try {
+          const decoded = jwt.verify(token, JWT_SECRET);
+          userId = decoded.userId;
+          user = await User.findOne({ userId });
+          console.log('🔐 Пользователь авторизован по JWT:', userId);
+        } catch (err) {
+          console.log('⚠️ Неверный JWT токен:', err.message);
+          // Продолжаем как анонимный пользователь
+        }
       }
       
+      // Если нет пользователя (ни по токену, ни по userId) - создаем нового
       if (!user) {
-        userId = uuidv4();
-        user = new User({
-          userId,
-          username: trimmedUsername,
-          socketId: socket.id,
-          ip: socket.handshake.address,
-          userAgent: socket.handshake.headers['user-agent']
-        });
-        await user.save();
-        console.log(`👤 Создан новый пользователь: ${trimmedUsername} (${userId})`);
-      } else {
-        // Проверяем, есть ли уже активное подключение этого пользователя
-        const existingSocketId = socketConnections.get(userId);
-        if (existingSocketId && existingSocketId !== socket.id) {
-          console.log(`⚠️ Пользователь ${trimmedUsername} уже подключен через ${existingSocketId}`);
-          
-          // Отключаем старое соединение
-          const oldSocket = io.sockets.sockets.get(existingSocketId);
-          if (oldSocket) {
-            oldSocket.emit('error', 'Новое подключение с вашего аккаунта');
-            oldSocket.disconnect(true);
-          }
+        // Если передан userId - пытаемся найти пользователя
+        if (userId) {
+          user = await User.findOne({ userId });
+          console.log('🔍 Поиск пользователя по userId:', userId, user ? 'найден' : 'не найден');
         }
-
+        
+        // Если все равно нет - создаем нового
+        if (!user) {
+          userId = uuidv4();
+          user = new User({
+            userId,
+            username: trimmedUsername,
+            socketId: socket.id,
+            ip: socket.handshake.address,
+            userAgent: socket.handshake.headers['user-agent']
+          });
+          await user.save();
+          console.log(`👤 Создан новый пользователь: ${trimmedUsername} (${userId})`);
+        } else {
+          // Пользователь найден по userId, но без токена - обновляем данные
+          user.socketId = socket.id;
+          user.lastSeen = new Date();
+          if (user.username !== trimmedUsername) {
+            console.log(`🔄 Смена имени: ${user.username} -> ${trimmedUsername}`);
+            user.username = trimmedUsername;
+          }
+          await user.save();
+          console.log(`👤 Пользователь переподключился: ${trimmedUsername} (${userId})`);
+        }
+      } else {
+        // Пользователь найден по JWT токену
         user.socketId = socket.id;
         user.lastSeen = new Date();
         if (user.username !== trimmedUsername) {
           console.log(`🔄 Смена имени: ${user.username} -> ${trimmedUsername}`);
           user.username = trimmedUsername;
+          await user.save();
         }
-        await user.save();
-        console.log(`👤 Пользователь переподключился: ${trimmedUsername} (${userId})`);
+        console.log(`👤 Пользователь авторизован: ${trimmedUsername} (${userId})`);
       }
 
       // Сохраняем связь userId -> socketId
@@ -375,11 +689,24 @@ io.on('connection', (socket) => {
         lastActivity: Date.now()
       });
 
-      // Отправляем пользователю его ID
-      socket.emit('initialized', {
+      // Отправляем пользователю его ID и токен (если его не было)
+      const response = {
         userId: user.userId,
-        username: user.username
-      });
+        username: user.username,
+        isAuthenticated: !!token
+      };
+      
+      // Если пользователь только что авторизовался через JWT, даем новый токен
+      if (token && user) {
+        const newToken = jwt.sign(
+          { userId: user.userId, username: user.username },
+          JWT_SECRET,
+          { expiresIn: JWT_EXPIRES_IN }
+        );
+        response.token = newToken;
+      }
+      
+      socket.emit('initialized', response);
 
       // Получаем список комнат
       const rooms = await Room.find({ 
@@ -612,7 +939,7 @@ io.on('connection', (socket) => {
         { $push: { createdRooms: newRoom._id } }
       );
 
-      const rooms = await Room.find({ 
+            const rooms = await Room.find({ 
         $or: [
           { isPrivate: false },
           { 'members.userId': user.userId }
@@ -622,7 +949,7 @@ io.on('connection', (socket) => {
         .lean();
 
       console.log(`📋 Получено ${rooms.length} комнат для обновления`);
-      socket.emit('roomsList', rooms);
+      io.emit('roomsList', rooms); // Broadcast to ALL clients
 
       const roomDataResponse = {
         ...newRoom.toObject(),
@@ -693,7 +1020,7 @@ io.on('connection', (socket) => {
         }
       }
 
-      const message = new Message({
+            const message = new Message({
         text: data.text.trim(),
         author: user.username,
         authorId: user.userId,
@@ -701,6 +1028,7 @@ io.on('connection', (socket) => {
         attachments: data.attachments || []
       });
 
+      console.log(`📨 Отправлено сообщение: author=${user.username}, authorId=${user.userId}`);
       await message.save();
 
       await Room.findByIdAndUpdate(room._id, {
@@ -750,13 +1078,19 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ===== СМЕНА НИКА =====
+    // ===== СМЕНА НИКА =====
   socket.on('changeUsername', async (newUsername) => {
     try {
       const user = onlineUsers.get(socket.id);
       if (!user) return;
 
-      const trimmedName = newUsername?.trim() || 'Аноним';
+      const trimmedName = newUsername?.trim();
+      
+      if (!trimmedName) {
+        socket.emit('error', 'Имя пользователя не может быть пустым');
+        return;
+      }
+      
       const oldUsername = user.username;
 
       if (trimmedName === oldUsername) return;
@@ -1106,7 +1440,7 @@ io.on('connection', (socket) => {
 
 // ==================== HTTP ЭНДПОИНТЫ ====================
 
-app.get('/api/rooms/:roomId', async (req, res) => {
+app.get('/api/rooms/:roomId', optionalAuth, async (req, res) => {
   try {
     const room = await Room.findById(req.params.roomId)
       .select('-password -bannedUsers')
@@ -1122,7 +1456,7 @@ app.get('/api/rooms/:roomId', async (req, res) => {
   }
 });
 
-app.get('/api/rooms/:roomId/stats', async (req, res) => {
+app.get('/api/rooms/:roomId/stats', optionalAuth, async (req, res) => {
   try {
     const room = await Room.findById(req.params.roomId);
     if (!room) {

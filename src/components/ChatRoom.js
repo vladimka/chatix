@@ -27,7 +27,7 @@ import {
 } from '../store/slices/chatSlice';
 import './ChatRoom.css';
 
-const ChatRoom = () => {
+const ChatRoom = ({ user, onLogout }) => {
   const dispatch = useDispatch();
   const messages = useSelector(selectMessages);
   const users = useSelector(selectUsers);
@@ -36,11 +36,75 @@ const ChatRoom = () => {
   const connectionStatus = useSelector(selectConnectionStatus);
   const error = useSelector(selectError);
   
-  // Загружаем username из localStorage при старте
-  const [username, setUsername] = useState(() => {
-    const saved = localStorage.getItem('chat_username');
-    return saved || 'Аноним';
-  });
+  // Используем данные из socketService (гарантированно доступны после инициализации)
+  const [userId, setUserId] = useState(() => socketService.getUserId());
+  const [username, setUsername] = useState(() => socketService.getUsername());
+  
+  console.log('🔍 Текущий userId в состоянии:', userId);
+  console.log('🔍 Текущий username в состоянии:', username);
+  console.log('🔍 socketService.getUserId():', socketService.getUserId());
+  console.log('🔍 socketService.getUsername():', socketService.getUsername());
+  
+    // Обновляем userId и username при изменении сокета или user prop
+  useEffect(() => {
+    const updateUserData = () => {
+      const socketUserId = socketService.getUserId();
+      const socketUsername = socketService.getUsername();
+      if (socketUserId) {
+        console.log('🔄 Обновляем userId из socketService:', socketUserId);
+        setUserId(socketUserId);
+      } else if (user?.userId) {
+        console.log('🔄 Обновляем userId из user prop:', user.userId);
+        setUserId(user.userId);
+      }
+      if (socketUsername) {
+        console.log('🔄 Обновляем username из socketService:', socketUsername);
+        setUsername(socketUsername);
+      } else if (user?.username) {
+        console.log('🔄 Обновляем username из user prop:', user.username);
+        setUsername(user.username);
+      }
+    };
+    
+    updateUserData();
+    
+    // Периодически проверяем, т.к. сокет может инициализироваться позже
+    const interval = setInterval(updateUserData, 500);
+    return () => clearInterval(interval);
+  }, [user]);
+  
+    // Также слушаем событие initialized для мгновенного обновления
+  useEffect(() => {
+    const handleInitialized = (data) => {
+      console.log('📦 Сокет инициализирован:', data);
+      if (data.userId) {
+        setUserId(data.userId);
+      }
+      if (data.username) {
+        setUsername(data.username);
+      }
+    };
+    
+    socketService.on('initialized', handleInitialized);
+    return () => socketService.off('initialized');
+  }, []);
+  
+    // Синхронизация с user prop
+  useEffect(() => {
+    if (user?.username) {
+      localStorage.setItem('chat_username', user.username);
+    }
+    if (user?.userId) {
+      localStorage.setItem('chat_userId', user.userId);
+    }
+    // Обновляем socket service если есть данные
+    if (user?.username) {
+      socketService.username = user.username;
+    }
+    if (user?.userId) {
+      socketService.userId = user.userId;
+    }
+  }, [user]);
   
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -60,7 +124,6 @@ const ChatRoom = () => {
   const messagesContainerRef = useRef(null);
   const messageInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
-  const usernameTimeoutRef = useRef(null);
 
   // Определяем iOS устройство
   useEffect(() => {
@@ -155,8 +218,11 @@ const ChatRoom = () => {
       }
     };
 
-    const handleNewMessage = (message) => {
+            const handleNewMessage = (message) => {
       console.log('💬 Новое сообщение:', message);
+      console.log('💬 userId текущего пользователя:', userId);
+      console.log('💬 authorId сообщения:', message.authorId);
+      console.log('💬 Совпадают?', String(message.authorId) === String(userId));
       dispatch(addMessage(message));
       scrollToBottom();
     };
@@ -258,12 +324,7 @@ const ChatRoom = () => {
         const initData = await socketService.connect();
         
         if (!mounted) return;
-
-        console.log('✅ Чат инициализирован:', initData);
-        
-        if (initData.username && initData.username !== username) {
-          setUsername(initData.username);
-        }
+                console.log('✅ Чат инициализирован:', initData);
         
         setIsInitialized(true);
         dispatch(setConnectionStatus('connected'));
@@ -307,27 +368,7 @@ const ChatRoom = () => {
       socketService.off('searchResults');
       socketService.off('error');
     };
-  }, [dispatch, username]);
-
-  // Сохранение username
-  useEffect(() => {
-    localStorage.setItem('chat_username', username);
-  }, [username]);
-
-  // Debounced отправка ника
-  useEffect(() => {
-    if (usernameTimeoutRef.current) {
-      clearTimeout(usernameTimeoutRef.current);
-    }
-
-    usernameTimeoutRef.current = setTimeout(() => {
-      if (socketService.isConnected()) {
-        socketService.emit('changeUsername', username);
-      }
-    }, 1000);
-
-    return () => clearTimeout(usernameTimeoutRef.current);
-  }, [username]);
+    }, [dispatch]);
 
   // Прокрутка вниз
   const scrollToBottom = useCallback(() => {
@@ -442,19 +483,7 @@ const ChatRoom = () => {
     }
   }, [currentRoom, isMobile]);
 
-  // Случайный ник
-  const generateRandomName = useCallback(() => {
-    const names = [
-      'Путешественник', 'Кодер', 'Хакер', 'Гик', 'Программист', 
-      'Дизайнер', 'Админ', 'Мастер', 'Воин', 'Маг', 'Эльф', 
-      'Хоббит', 'Астронавт', 'Пират', 'Ниндзя', 'Самурай'
-    ];
-    const randomName = names[Math.floor(Math.random() * names.length)] + 
-                      Math.floor(Math.random() * 1000);
-    setUsername(randomName);
-  }, []);
-
-  // Поиск комнат
+    // Поиск комнат
   const handleSearch = useCallback((query) => {
     setSearchQuery(query);
     if (query.trim()) {
@@ -546,22 +575,7 @@ const ChatRoom = () => {
 
         <div className="header-right">
           <div className="user-info">
-            <input
-              type="text"
-              className="username-input"
-              placeholder="Ник"
-              maxLength="24"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              title="Ник изменится через 1 секунду"
-            />
-            <button 
-              className="btn-icon"
-              onClick={generateRandomName}
-              title="Случайный ник"
-            >
-              🎲
-            </button>
+            <span className="username-display">{username}</span>
           </div>
           <button 
             className={`btn-icon users-toggle ${showUserList ? 'active' : ''}`}
@@ -570,6 +584,15 @@ const ChatRoom = () => {
           >
             👥 {!isMobile && users.length}
           </button>
+          {onLogout && (
+            <button 
+              className="btn-icon logout-btn"
+              onClick={onLogout}
+              title="Выйти"
+            >
+              🚪
+            </button>
+          )}
         </div>
       </div>
 
@@ -662,12 +685,12 @@ const ChatRoom = () => {
                           </div>
                         )}
                         
-                        {msg.system ? (
+                                                {msg.system ? (
                           <div className="system-message">
                             {msg.text || 'Системное сообщение'}
                           </div>
                         ) : (
-                          <div className={`message ${msg.author === username ? 'own' : ''}`}>
+                          <div className={`message ${userId && String(msg.authorId) === String(userId) ? 'own' : ''}`}>
                             <div className="message-header">
                               <span className="author">{msg.author || 'Неизвестно'}</span>
                               <span className="time">

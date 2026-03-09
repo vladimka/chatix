@@ -1,15 +1,15 @@
 import { io } from 'socket.io-client';
 
 // Определяем URL сокета в зависимости от окружения
-const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://192.168.1.218:3001';
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3001` : 'http://localhost:3001');
 
 class SocketService {
-  constructor() {
+    constructor() {
     this.socket = null;
     this.listeners = new Map();
     this.eventQueue = []; // Очередь событий для регистрации после подключения
     this.userId = localStorage.getItem('chat_userId');
-    this.username = localStorage.getItem('chat_username') || 'Аноним';
+    this.username = localStorage.getItem('chat_username');
     this.initPromise = null;
     this.isConnecting = false;
     this.connectionAttempts = 0;
@@ -35,7 +35,7 @@ class SocketService {
     }
   }
 
-  connect() {
+      connect() {
     return new Promise((resolve, reject) => {
       if (this.isConnecting) {
         console.log('🔄 Уже подключаемся...');
@@ -50,6 +50,11 @@ class SocketService {
         resolve({ userId: this.userId, username: this.username });
         return;
       }
+
+      // Always refresh credentials from localStorage before connecting
+      this.userId = localStorage.getItem('chat_userId');
+      this.username = localStorage.getItem('chat_username');
+      console.log('📝 Using credentials:', { userId: this.userId, username: this.username });
 
       this.isConnecting = true;
       this.connectionAttempts++;
@@ -76,14 +81,13 @@ class SocketService {
           this.socket.disconnect();
         }
 
-        const options = {
+                const options = {
           transports: ['websocket', 'polling'],
           reconnection: true,
           reconnectionAttempts: 5,
           reconnectionDelay: 1000,
           timeout: 20000,
           forceNew: false,
-          withCredentials: true,
           path: '/socket.io'
         };
 
@@ -103,10 +107,12 @@ class SocketService {
           // Регистрируем все отложенные события
           this.registerQueuedEvents();
           
-          // Отправляем инициализацию
+          // Отправляем инициализацию с JWT токеном
+          const token = localStorage.getItem('token');
           const initData = {
             username: this.username,
-            userId: this.userId
+            userId: this.userId,
+            token: token || undefined
           };
           console.log('📤 Отправка init:', initData);
           this.socket.emit('init', initData);
@@ -169,10 +175,21 @@ class SocketService {
     this.listeners.clear();
   }
 
-  on(event, callback) {
+    on(event, callback) {
     console.log(`📋 Попытка регистрации обработчика для ${event}`);
     
-    // Сохраняем в Map для последующего использования
+    // Если обработчик уже существует, удаляем его перед добавлением нового
+    if (this.listeners.has(event)) {
+      const oldCallback = this.listeners.get(event);
+      if (this.socket) {
+        console.log(`🔄 Удаление предыдущего обработчика для ${event} перед заменой`);
+        this.socket.off(event, oldCallback);
+      }
+      // Удаляем из очереди, если там есть
+      this.eventQueue = this.eventQueue.filter(item => item.event !== event);
+    }
+    
+    // Сохраняем новый обработчик
     this.listeners.set(event, callback);
     
     // Если сокет уже создан, регистрируем сразу
@@ -197,11 +214,17 @@ class SocketService {
     this.eventQueue = [];
   }
 
-  off(event) {
+    off(event) {
     if (this.socket && this.listeners.has(event)) {
       this.socket.off(event, this.listeners.get(event));
       this.listeners.delete(event);
       console.log(`🗑️ Удален обработчик для ${event}`);
+    }
+    // Также удаляем из очереди, если событие там есть
+    const initialLength = this.eventQueue.length;
+    this.eventQueue = this.eventQueue.filter(item => item.event !== event);
+    if (this.eventQueue.length < initialLength) {
+      console.log(`🗑️ Удалено из очереди событие ${event}`);
     }
   }
 
